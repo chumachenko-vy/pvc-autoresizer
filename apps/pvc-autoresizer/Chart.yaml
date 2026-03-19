@@ -1,0 +1,7 @@
+apiVersion: v2
+name: pvc-autoresizer
+version: 1.0.0
+dependencies:
+  - name: pvc-autoresizer
+    version: "0.16.2"
+    repository: "https://topolvm.github.io/pvc-autoresizer/"

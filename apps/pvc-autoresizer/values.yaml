@@ -1,0 +1,6 @@
+pvc-autoresizer:
+  controller:
+    args:
+      prometheusURL: "http://prometheus-kube-prometheus-prometheus.prometheus.svc.cluster.local:9090"
+      interval: "10s"
+      noAnnotationCheck: true
