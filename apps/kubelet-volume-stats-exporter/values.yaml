@@ -4,4 +4,6 @@ kubelet-volume-stats-exporter:
     additionalLabels:
       release: prometheus
 
-  priorityClassName: null
+  priorityClassName: ""
+
+  fullnameOverride: kubelet-volume-stats-exporter
