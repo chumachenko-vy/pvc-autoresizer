@@ -6,4 +6,15 @@ kubelet-volume-stats-exporter:
 
   priorityClassName: ""
 
-  fullnameOverride: kubelet-volume-stats-exporter
+  args:
+    - --kubelet-endpoint=https://127.0.0.1:10250
+    - --metrics-port=9118
+    - --scrape-interval=30s
+    - --token-path=/var/run/secrets/kubernetes.io/serviceaccount/token
+    - --insecure-skip-tls-verify=true
+
+  containerPort: 9118
+
+  service:
+    port: 9118
+    targetPort: 9118
