@@ -4,22 +4,4 @@ kubelet-volume-stats-exporter:
     additionalLabels:
       release: prometheus
 
-  priorityClassName: ""
-
-  # Порт 9118 замість 8080 (8080 зайнятий pvc-autoresizer)
-  config:
-    metricsPort: 9118
-
-  service:
-    port: 9118
-    targetPort: 9118
-
-  containerPort: 9118
-
-  # Аргументи запуску
-  args:
-    - --kubelet-endpoint=https://127.0.0.1:10250
-    - --metrics-port=9118
-    - --scrape-interval=30s
-    - --token-path=/var/run/secrets/kubernetes.io/serviceaccount/token
-    - --insecure-skip-tls-verify=true
+  priorityClassName: null
