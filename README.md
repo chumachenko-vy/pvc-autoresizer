@@ -34,9 +34,7 @@ kubelet /stats/summary → kubelet-volume-stats-exporter → Prometheus → pvc-
 - cert-manager (потрібен для pvc-autoresizer webhook)
 - StorageClass з `allowVolumeExpansion: true`
 
-## Швидкий старт
-
-### Варіант 1: Helm
+## Встановлення
 
 ```bash
 cd pvc-autoresizer
@@ -46,16 +44,7 @@ helm install pvc-autoresizer . \
   --create-namespace
 ```
 
-### Варіант 2: ArgoCD
-
-```bash
-kubectl apply -f examples/argocd-application.yaml
-```
-
-Або створіть ArgoCD Application через UI, вказавши:
-- **Repo URL:** `https://github.com/chumachenko-vy/pvc-autoresizer-argocd.git`
-- **Path:** `pvc-autoresizer`
-- **Namespace:** `pvc-autoresizer`
+Приклад ArgoCD Application для деплою через GitOps — в `examples/argocd-application.yaml`.
 
 ## Ручні кроки (один раз на кластер)
 
