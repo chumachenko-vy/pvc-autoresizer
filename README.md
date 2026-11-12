@@ -1,161 +1,212 @@
-# 🔌 Power Monitor Bot
+# PVC Autoresizer
 
-Telegram бот для моніторингу електроенергії вдома. Сповіщає про відключення та увімкнення світла, показує графіки ДТЕК, веде статистику.
+Автоматичне збільшення PVC на Kubernetes кластерах (GKE, Scaleway) з K8s >= 1.34.
 
-## Як працює
+## Проблема
+
+Kubernetes 1.34+ має баг — kubelet не експортує `kubelet_volume_stats_*` метрики через `/metrics` endpoint ([kubernetes/kubernetes#133847](https://github.com/kubernetes/kubernetes/issues/133847)).
+Без цих метрик неможливо моніторити заповнення дисків і автоматично їх збільшувати.
+
+## Рішення
+
+Цей Helm chart встановлює повний стек для автоматичного ресайзу PVC:
 
 ```
-ESP32 (вдома)                GCE VM (хмара)              Telegram
-┌────────────┐  heartbeat   ┌──────────────┐            ┌──────────┐
-│ живиться   │──кожні 30с──▶│ HTTP сервер  │──сповіщ──▶ │  ваш чат │
-│ від мережі │              │ + Telegram   │            │          │
-└────────────┘              │ + YASNO API  │            └──────────┘
-                            └──────────────┘
+kubelet /stats/summary → kubelet-volume-stats-exporter → Prometheus → pvc-autoresizer → resize PVC
+                                                                    → PrometheusRule → alerts
+                                              CronJob annotator → PVC annotations (storage_limit)
 ```
 
-- Світло зникло → ESP32 вимкнувся → heartbeat пропав → бот: **🔴 Світло ВИМКНЕНО!**
-- Світло повернулось → ESP32 стартує → heartbeat прийшов → бот: **💡 Світло УВІМКНЕНО!**
-- Бот порівнює з графіком ДТЕК і повідомляє: планове чи позапланове відключення
-- За 30 хвилин до планового відключення бот попереджає
+## Компоненти
 
-## Можливості
+| Компонент | Що робить |
+|-----------|-----------|
+| [pvc-autoresizer](https://github.com/topolvm/pvc-autoresizer) | Контролер — моніторить PVC через Prometheus, збільшує коли заповнення досягає threshold |
+| [kubelet-volume-stats-exporter](https://github.com/vbeaucha/kubelet-volume-stats-exporter) | DaemonSet — читає `/stats/summary` з kubelet і віддає метрики в Prometheus-форматі |
+| CronJob annotator | Кожні 5 хв знаходить всі Bound PVC і ставить анотацію `storage_limit` (default: 500Gi) |
+| PrometheusRule | Warning коли PVC наближається до ліміту (80%), Critical коли < 10% вільного місця |
+| ResourceQuota | Дозволяє exporter поди з `system-node-critical` priority (потрібно на GKE) |
 
-- 🔔 Сповіщення про вимкнення/увімкнення світла
-- 📅 Графік відключень ДТЕК (YASNO API) на сьогодні та завтра
-- ⏰ Попередження за 30 хв до планового відключення
-- 📋 Мітка "планове" / "позапланове" на кожному відключенні
-- 💡 При вимкненні — коли буде світло за графіком
-- 🔴 При увімкненні — коли наступне відключення
-- 📊 Статистика: скільки було/не було світла (години, відсотки)
-- 🔌 Підтримка Tuya Smart Plug (опціонально, замість або разом з ESP32)
+## Вимоги
+
+- Kubernetes >= 1.34
+- Prometheus (kube-prometheus-stack) з підтримкою ServiceMonitor
+- cert-manager (потрібен для pvc-autoresizer webhook)
+- StorageClass з `allowVolumeExpansion: true`
 
 ## Швидкий старт
 
-### 1. Створіть Telegram бота
-
-Напишіть [@BotFather](https://t.me/BotFather) → `/newbot` → збережіть токен.
-
-### 2. Підніміть сервер
-
-Підійде будь-який Linux-сервер із зовнішнім IP та доступом до інтернету:
-
-| Варіант | Примітка |
-|---------|----------|
-| Google Cloud (GCE) | `e2-micro` — безкоштовний free tier |
-| AWS (EC2) | `t2.micro` / `t3.micro` — free tier 12 міс |
-| Azure | `B1s` — free tier 12 міс |
-| Hetzner | від €3.79/міс, найдешевший VPS |
-| DigitalOcean | від $4/міс |
-| Oracle Cloud | `VM.Standard.E2.1.Micro` — безкоштовно назавжди |
-| Домашній сервер | Raspberry Pi, старий ПК, віртуалка |
-
-**Вимоги:** Ubuntu/Debian, Python 3.10+, відкритий порт `8080` (для ESP32 heartbeat).
-
-> ⚠️ Бот має працювати **НЕ вдома** (або на ДБЖ), бо повинен бути доступний коли вдома немає світла.
-
-### 3. Розгорніть бота на сервері
-
-Підключіться до сервера по SSH та виконайте:
+### Варіант 1: Helm
 
 ```bash
-# Встановіть залежності
-sudo apt update && sudo apt install -y python3-pip git
-sudo pip3 install python-telegram-bot aiohttp --break-system-packages
-
-# Клонуйте репозиторій
-sudo git clone https://github.com/chumachenko-vy/power-monitor-bot.git /opt/power_monitor_bot
-
-# Створіть конфіг
-cd /opt/power_monitor_bot
-sudo cp config.example.py config.py
-sudo nano config.py    # впишіть BOT_TOKEN та HEARTBEAT_SECRET
-
-# Створіть користувача та запустіть
-sudo useradd -m -s /bin/bash powerbot
-sudo chown -R powerbot:powerbot /opt/power_monitor_bot
-sudo cp powerbot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable powerbot
-sudo systemctl start powerbot
+cd pvc-autoresizer
+helm dependency update
+helm install pvc-autoresizer . \
+  -n pvc-autoresizer \
+  --create-namespace
 ```
 
-**Відкрийте порт 8080** у фаєрволі вашого хостингу (Security Groups в AWS, Firewall Rules в GCE, тощо) для вхідного TCP трафіку.
+### Варіант 2: ArgoCD
 
-### 4. Прошийте ESP32
-
-1. Встановіть [Arduino IDE](https://www.arduino.cc/en/software)
-2. Додайте підтримку ESP32: **Файл → Параметри** → Additional boards URL:
-   ```
-   https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-   ```
-3. **Інструменти → Плата → Менеджер плат** → встановіть **ESP32 by Espressif**
-4. Відкрийте `esp32/esp32_heartbeat.ino`
-5. Заповніть Wi-Fi та IP сервера
-6. **Інструменти → Плата** → ESP32 Dev Module
-7. **Інструменти → Порт** → ваш COM-порт
-8. **Завантажити (→)**
-9. Підключіть ESP32 через USB-зарядку в розетку **без ДБЖ**
-
-### 5. Налаштуйте бота
-
-Напишіть боту в Telegram:
-- `/start` — підписатись на сповіщення
-- `/setgroup 27.1` — встановити групу ДТЕК (дізнатись: [@DTEK_KEM_bot](https://t.me/DTEK_KEM_bot))
-- `/schedule` — перевірити графік
-
-## Команди бота
-
-| Команда | Опис |
-|---------|------|
-| `/start` | Меню та підписка |
-| `/setgroup <група>` | Встановити групу ДТЕК |
-| `/schedule` | Графік на сьогодні |
-| `/tomorrow` | Графік на завтра |
-| `/status` | Поточний стан |
-| `/stats` | Загальна статистика |
-| `/today` | Статистика за 24 години |
-| `/week` | Статистика за тиждень |
-| `/history` | Останні 15 подій |
-| `/power` | Споживання (Tuya) |
-
-## Приклади повідомлень
-
-```
-🔴 Світло ВИМКНЕНО!
-🕐 26.10.2026 18:00:12
-⏱ Світло було: 3 год 45 хв
-📋 Планове відключення
-💡 За графіком увімкнення о 21:30
-
-💡 Світло УВІМКНЕНО!
-🕐 26.10.2026 21:31:05
-⏱ Світла не було: 3 год 31 хв
-📋 Планове відключення
-🔴 Наступне відключення за графіком: завтра о 11:30
+```bash
+kubectl apply -f examples/argocd-application.yaml
 ```
 
-## Структура
+Або створіть ArgoCD Application через UI, вказавши:
+- **Repo URL:** `https://github.com/chumachenko-vy/pvc-autoresizer-argocd.git`
+- **Path:** `pvc-autoresizer`
+- **Namespace:** `pvc-autoresizer`
 
+## Ручні кроки (один раз на кластер)
+
+```bash
+# Анотувати StorageClass (приклади для GKE та Scaleway)
+kubectl annotate sc standard-rwo resize.topolvm.io/enabled=true   # GKE
+kubectl annotate sc premium-rwo resize.topolvm.io/enabled=true    # GKE
+kubectl annotate sc scw-bssd resize.topolvm.io/enabled=true       # Scaleway
+kubectl annotate sc sbs-default resize.topolvm.io/enabled=true    # Scaleway
 ```
-├── bot.py                  # Telegram бот + HTTP сервер + YASNO API
-├── config.example.py       # Приклад конфігурації (скопіювати в config.py)
-├── tuya_client.py          # Tuya Cloud API клієнт (опціонально)
-├── requirements.txt        # Python залежності
-├── powerbot.service        # Systemd сервіс
-└── esp32/
-    └── esp32_heartbeat.ino # Прошивка ESP32
+
+## Конфігурація
+
+### Основні параметри (`values.yaml`)
+
+| Параметр | Default | Опис |
+|----------|---------|------|
+| `annotator.storageLimit` | `500Gi` | Максимальний ліміт збільшення PVC |
+| `annotator.threshold` | `10%` | При якому % використання починати ресайз |
+| `annotator.increase` | `10%` | На скільки збільшувати PVC за раз |
+| `annotator.schedule` | `*/5 * * * *` | Як часто CronJob перевіряє PVC |
+| `alerts.enabled` | `true` | Увімкнути Prometheus алерти |
+| `alerts.labels.release` | `prometheus` | Label для ServiceMonitor discovery |
+| `resourceQuota.enabled` | `true` | Створити ResourceQuota для system-node-critical |
+
+### Autoresizer
+
+| Параметр | Default | Опис |
+|----------|---------|------|
+| `autoresizer.controller.args.prometheusURL` | `http://prometheus-kube-prometheus-prometheus.prometheus.svc.cluster.local:9090` | Prometheus endpoint |
+| `autoresizer.controller.args.interval` | `10s` | Інтервал перевірки PVC |
+| `autoresizer.controller.args.additionalArgs` | `["--no-annotation-check"]` | Працювати з будь-яким PVC без анотації на StorageClass |
+
+### Exporter
+
+| Параметр | Default | Опис |
+|----------|---------|------|
+| `exporter.config.metricsPort` | `9118` | Порт метрик (9118 замість 8080 — конфлікт з autoresizer) |
+| `exporter.config.scrapeInterval` | `60s` | Інтервал збору метрик (60s для уникнення timeout на навантажених нодах) |
+| `exporter.serviceMonitor.labels.release` | `prometheus` | Label для Prometheus discovery |
+
+### Приклад override для кластера з arm64 нодами (GKE)
+
+```yaml
+exporter:
+  nodeSelector:
+    kubernetes.io/arch: amd64
 ```
 
-## Tuya Smart Plug (опціонально)
+## Як працює ресайз
 
-Замість або разом з ESP32 можна використовувати розумну Wi-Fi розетку Tuya з ватметром. Бот перевіряє онлайн/офлайн статус розетки через Tuya Cloud API, а також показує поточне споживання у ватах.
+1. **CronJob** кожні 5 хв ставить на всі Bound PVC анотації:
+   - `resize.topolvm.io/storage_limit: 500Gi`
+   - `resize.topolvm.io/threshold: 10%`
+   - `resize.topolvm.io/increase: 10%`
 
-Для налаштування:
-1. Зареєструйтесь на [iot.tuya.com](https://iot.tuya.com)
-2. Створіть Cloud Project, отримайте Access ID та Secret
-3. Прив'яжіть розетку через додаток SmartLife/Tuya
-4. Заповніть `TUYA_*` параметри в `config.py`, встановіть `TUYA_ENABLED = True`
+2. **Exporter** (DaemonSet) на кожній ноді збирає метрики з kubelet `/stats/summary`
 
-## Ліцензія
+3. **Prometheus** скрейпить exporter через ServiceMonitor
 
-MIT
+4. **pvc-autoresizer** кожні 10 секунд перевіряє:
+   - Якщо PVC заповнений на 90%+ → збільшує на 10%
+   - Якщо PVC досяг `storage_limit` (500Gi) → зупиняється, логує `volume storage limit reached`
+
+5. **PrometheusRule** генерує алерти:
+   - `PVCStorageLimitReached` (warning) — PVC capacity >= 400Gi (80% від ліміту)
+   - `PVCUsageCritical` (critical) — менше 10% вільного місця
+
+## Тестування ресайзу
+
+```bash
+# 1. Створити тестовий PVC + Pod
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-autoresize
+  namespace: pvc-autoresizer
+  annotations:
+    resize.topolvm.io/storage_limit: 10Gi
+    resize.topolvm.io/threshold: 50%
+    resize.topolvm.io/increase: 1Gi
+spec:
+  accessModes: [ReadWriteOnce]
+  volumeMode: Filesystem
+  storageClassName: standard-rwo
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-autoresize-pod
+  namespace: pvc-autoresizer
+spec:
+  containers:
+    - name: writer
+      image: busybox
+      command: ["sh", "-c", "sleep infinity"]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: test-autoresize
+EOF
+
+# 2. Зачекати 2 хвилини поки Prometheus підхопить метрики
+
+# 3. Заповнити диск на 60% (threshold 50%)
+kubectl exec -n pvc-autoresizer test-autoresize-pod -- dd if=/dev/zero of=/data/bigfile bs=1M count=600
+
+# 4. Спостерігати — PVC має зрости з 1Gi до 2Gi за 1-2 хв
+kubectl get pvc test-autoresize -n pvc-autoresizer -w
+
+# 5. Після тесту — видалити
+kubectl delete pod test-autoresize-pod -n pvc-autoresizer
+kubectl delete pvc test-autoresize -n pvc-autoresizer
+```
+
+## Відомі обмеження
+
+- **Exporter image тільки amd64** — на кластерах з arm64 нодами додайте `exporter.nodeSelector`
+- **Timeout на навантажених нодах** — kubelet з великою кількістю подів може не встигати відповісти; `scrapeInterval: 60s` зменшує проблему
+- **PVC без running подів** — не мають метрик, але диски й не заповнюються без workload
+- **Kubernetes bug** — [kubernetes/kubernetes#133847](https://github.com/kubernetes/kubernetes/issues/133847), exporter потрібен поки баг не виправлять в upstream
+
+## Перевірка після деплою
+
+```bash
+# Поди
+kubectl get pods -n pvc-autoresizer
+
+# CronJob
+kubectl get cronjob -n pvc-autoresizer
+
+# Метрики в Prometheus
+kubectl port-forward -n prometheus svc/prometheus-kube-prometheus-prometheus 9090:9090
+# http://localhost:9090 → query: kubelet_volume_stats_available_bytes
+
+# Алерти
+# http://localhost:9090/alerts → PVCStorageLimitReached, PVCUsageCritical
+
+# Логи autoresizer
+kubectl logs -n pvc-autoresizer -l app.kubernetes.io/name=pvc-autoresizer-controller --tail=20
+
+# Логи exporter
+kubectl logs -n pvc-autoresizer <exporter-pod> --tail=10
+
+# Логи CronJob
+kubectl logs -n pvc-autoresizer -l app.kubernetes.io/name=pvc-autoresizer --tail=20
+```
