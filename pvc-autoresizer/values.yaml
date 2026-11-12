@@ -1,0 +1,70 @@
+fullnameOverride: "pvc-autoresizer"
+
+# PVC Annotator CronJob
+annotator:
+  enabled: true
+  schedule: "*/5 * * * *"
+  storageLimit: "500Gi"
+  threshold: "10%"
+  increase: "10%"
+  image:
+    repository: bitnami/kubectl
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+# Prometheus alerts
+alerts:
+  enabled: true
+  storageLimit: "500Gi"
+  labels:
+    release: prometheus
+
+# ResourceQuota for system-node-critical pods
+resourceQuota:
+  enabled: true
+
+# ServiceAccount
+serviceAccount:
+  create: true
+
+# RBAC
+rbac:
+  create: true
+
+# pvc-autoresizer dependency
+autoresizer:
+  controller:
+    args:
+      prometheusURL: "http://prometheus-kube-prometheus-prometheus.prometheus.svc.cluster.local:9090"
+      interval: "10s"
+      additionalArgs:
+        - --no-annotation-check
+
+# kubelet-volume-stats-exporter dependency
+exporter:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: prometheus
+  config:
+    metricsPort: 9118
+    scrapeInterval: "60s"
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9118"
+    prometheus.io/path: "/metrics"
+  service:
+    port: 9118
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9118"
+      prometheus.io/path: "/metrics"

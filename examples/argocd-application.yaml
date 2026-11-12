@@ -1,0 +1,42 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pvc-autoresizer
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: pvc-autoresizer
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+  source:
+    repoURL: https://github.com/chumachenko-vy/pvc-autoresizer-argocd.git
+    targetRevision: refs/heads/main
+    path: pvc-autoresizer
+    helm:
+      releaseName: pvc-autoresizer
+      valuesObject:
+        # Override defaults per cluster:
+        autoresizer:
+          controller:
+            args:
+              prometheusURL: "http://prometheus-kube-prometheus-prometheus.prometheus.svc.cluster.local:9090"
+              interval: "10s"
+              additionalArgs:
+                - --no-annotation-check
+        exporter:
+          serviceMonitor:
+            enabled: true
+            labels:
+              release: prometheus
+          config:
+            metricsPort: 9118
+            scrapeInterval: "60s"
+          service:
+            port: 9118
+          # Uncomment for mixed arch clusters:
+          # nodeSelector:
+          #   kubernetes.io/arch: amd64

@@ -1,0 +1,33 @@
+{{- if .Values.alerts.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "pvc-autoresizer.fullname" . }}-alerts
+  labels:
+    {{- include "pvc-autoresizer.labels" . | nindent 4 }}
+    {{- with .Values.alerts.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: pvc-autoresizer
+      rules:
+        - alert: PVCStorageLimitReached
+          expr: |
+            kubelet_volume_stats_capacity_bytes >= {{ include "pvc-autoresizer.storageLimitBytes" . }} * 0.8
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{`{{ $labels.namespace }}`}}/{{`{{ $labels.persistentvolumeclaim }}`}} approaching storage limit"
+            description: "PVC capacity is {{`{{ $value | humanize1024 }}`}}B (limit {{ .Values.annotator.storageLimit }}). Manual intervention may be needed."
+        - alert: PVCUsageCritical
+          expr: |
+            kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes < 0.1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PVC {{`{{ $labels.namespace }}`}}/{{`{{ $labels.persistentvolumeclaim }}`}} has less than 10% free space"
+            description: "Available: {{`{{ $value | humanizePercentage }}`}}. Check if storage limit is reached."
+{{- end }}

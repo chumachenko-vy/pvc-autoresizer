@@ -1,0 +1,62 @@
+{{- if .Values.annotator.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "pvc-autoresizer.fullname" . }}-annotator
+  labels:
+    {{- include "pvc-autoresizer.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.annotator.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.annotator.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.annotator.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            {{- include "pvc-autoresizer.selectorLabels" . | nindent 12 }}
+        spec:
+          serviceAccountName: {{ include "pvc-autoresizer.serviceAccountName" . }}
+          restartPolicy: Never
+          containers:
+            - name: annotator
+              image: "{{ .Values.annotator.image.repository }}:{{ .Values.annotator.image.tag }}"
+              imagePullPolicy: {{ .Values.annotator.image.pullPolicy }}
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  DESIRED_LIMIT="{{ .Values.annotator.storageLimit }}"
+                  DESIRED_THRESHOLD="{{ .Values.annotator.threshold }}"
+                  DESIRED_INCREASE="{{ .Values.annotator.increase }}"
+                  echo "=== PVC Annotator ==="
+                  echo "Desired storage_limit: ${DESIRED_LIMIT}"
+                  echo ""
+
+                  kubectl get pvc -A -o json | jq -r '
+                    .items[]
+                    | select(.status.phase == "Bound")
+                    | select(.spec.volumeMode == "Filesystem" or .spec.volumeMode == null)
+                    | [.metadata.namespace, .metadata.name, (.metadata.annotations["resize.topolvm.io/storage_limit"] // "NONE")] | @tsv
+                  ' | while IFS=$'\t' read -r ns name current_limit; do
+                    if [ "${current_limit}" = "${DESIRED_LIMIT}" ]; then
+                      echo "OK: ${ns}/${name} (limit=${current_limit})"
+                    else
+                      echo "UPDATE: ${ns}/${name} (was=${current_limit}, set=${DESIRED_LIMIT})"
+                      kubectl annotate pvc "${name}" -n "${ns}" --overwrite \
+                        "resize.topolvm.io/storage_limit=${DESIRED_LIMIT}" \
+                        "resize.topolvm.io/threshold=${DESIRED_THRESHOLD}" \
+                        "resize.topolvm.io/increase=${DESIRED_INCREASE}"
+                    fi
+                  done
+
+                  echo ""
+                  echo "=== Done ==="
+              {{- with .Values.annotator.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+{{- end }}
