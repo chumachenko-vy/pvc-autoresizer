@@ -13,7 +13,7 @@ spec:
       - CreateNamespace=true
       - ServerSideApply=true
   source:
-    repoURL: https://github.com/chumachenko-vy/pvc-autoresizer-argocd.git
+    repoURL: https://github.com/chumachenko-vy/pvc-autoresizer.git
     targetRevision: refs/heads/main
     path: pvc-autoresizer
     helm:
