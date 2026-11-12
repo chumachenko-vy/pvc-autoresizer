@@ -1,5 +1,0 @@
-{{- $ds := (lookup "apps/v1" "DaemonSet" .Release.Namespace "kubelet-volume-stats-exporter") -}}
-{{- if $ds -}}
-{{- $_ := unset $ds.spec.template.spec "priorityClassName" -}}
-{{- $ds | toYaml }}
-{{- end -}}
